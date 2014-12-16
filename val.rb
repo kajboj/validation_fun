@@ -3,22 +3,22 @@ def hash(*validators)
     if h.is_a?(Hash)
       all(*validators).call(h, errors, prefix)
     else
-      [h, merge(errors, {prefix => ['must be a hash']})]
+      add(errors, 'must be a hash', prefix)
+      false
     end
   end
 end
 
 def allowed_keys(allowed_keys)
   lambda do |h, errors, prefix|
-    new_errors = {}
-
-    h.keys.each do |key|
+    h.keys.inject(true) do |b, key|
       if !allowed_keys.include?(key)
-        new_errors[join(prefix, key)] = ['not allowed']
+        add(errors, 'not allowed', prefix, key)
+        false
+      else
+        b && true
       end
     end
-
-    [h, merge(errors, new_errors)]
   end
 end
 
@@ -27,7 +27,8 @@ def nested_hash(key, *validators)
     if h[key].is_a?(Hash)
       all(*validators).call(h[key], errors, join(prefix, key))
     else
-      [h[key], merge(errors, {join(prefix, key) => ['must be a hash']})]
+      add(errors, key, 'must be a hash')
+      false
     end
   end
 end
@@ -35,15 +36,15 @@ end
 def nested_array(key, validator = lambda {})
   lambda do |h, errors, prefix|
     if h[key].is_a?(Array)
-      result_object, result_errors = [], errors
       h[key].each.with_index do |object, index|
-        new_object, new_errors = validator.call(object, errors, join(prefix, index))
+        validator.call(object, errors, join(prefix, index))
         result_object << new_object
         result_errors = merge(result_errors, new_errors)
       end
       [result_object, result_errors]
     else
-      [h[key], merge(errors, {join(prefix, key) => ['must be an array']})]
+      add(errors, key, 'must be an array')
+      false
     end
   end
 end
@@ -54,43 +55,57 @@ def integer(key)
       i = Integer(h[key])
       h[key] = i
       [h, errors]
-    rescue ArgumentError
+    rescue ArgumentError, TypeError
       [h, merge(errors, {join(prefix, key) => ['must be an integer']})]
     end
   end
 end
 
 def from_to(key)
-  nested_hash(key,
-    integer('from'),
-    integer('to')
+  first_failure(
+    nested_hash(key,
+      allowed_keys(['from', 'to']),
+      integer('from'),
+      integer('to')
+    ),
+    lambda do |h, errors, prefix|
+      if h[key]['from'] > h[key]['to']
+        [h, merge(errors, {join(prefix, key, 'to') => ['must be greater or equal from']})]
+      else
+        [h, errors]
+      end
+    end
   )
 end
 
 def tariff_id(key, merchant); end
 
-
 def all(*validators)
   lambda do |object, errors, prefix|
+    validators.inject(true) do |b, validator|
+      r = validator.call(object, errs, prefix)
+      b && r
+    end
+  end
+end
+
+def first_failure(*validators)
+  lambda do |object, errors, prefix|
+    count = count_errors(errors)
     [
       object,
-      validators.inject(errors) do |errs, validator|
-        o, new_errors = validator.call(object, errs, prefix)
-        merge(errs, new_errors)
+      validators.each do |validator|
+        o, new_errors = validator.call(object, errors, prefix)
+        if count < count_errors(new_errors)
+          return [o, new_errors]
+        end
       end
     ]
   end
 end
 
-def required(key)
-  lambda do |hash, errors, prefix|
-    if hash.has_key?(key)
-      [hash, errors]
-    else
-      errors[join(prefix, key)]
-      [hash, error]
-    end
-  end
+def add(errors, msg, *segments)
+  merge(errors, {join(*segments) => [msg]})
 end
 
 def merge(e1, e2)
@@ -100,11 +115,14 @@ def merge(e1, e2)
   end
 end
 
-def join(prefix, segment)
-  [prefix, segment].compact.join('/')
+def count_errors(e)
+  e.inject(0) do |count, (_, v)|
+    count + v.size
+  end
 end
 
-def each(key, validator)
+def join(*segments)
+  segments.compact.join('/')
 end
 
 def merchant; end
@@ -146,8 +164,8 @@ w = hash(
         allowed_keys(['conditions', 'tariff_id']),
         nested_hash('conditions',
           allowed_keys(['basket_value', 'distance']),
-          from_to('basket_value'),
           from_to('basket_value')
+          # from_to('distance')
         )
       )
     )
@@ -160,8 +178,12 @@ h = {
       {
         'conditions' => {
           'basket_value' => {
-            'from' => 'hello',
-            'to'   => 5
+            'from' => 7,
+            'to'   => '12'
+          },
+          'distance' => {
+            'from' => 1,
+            'to'   => 2
           }
         },
         'tariff_id'  => 'world'
@@ -170,4 +192,5 @@ h = {
   }
 }
 
-puts w.call(h, {}, nil)
+require 'json'
+puts JSON.pretty_generate(w.call(h, {}, nil))
