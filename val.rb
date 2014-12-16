@@ -1,56 +1,63 @@
-def hash(msg = 'must be a hash')
-  lambda do |h|
+def hash(*validators)
+  lambda do |h, errors, prefix|
     if h.is_a?(Hash)
-      [h, {}]
+      all(*validators).call(h, errors, prefix)
     else
-      [{}, {'base' => [msg]}]
+      [{}, merge(errors, {join(prefix, 'base') => ['must be a hash']})]
     end
   end
 end
 
-def allowed_keys(allowed_keys, msg = 'not allowed')
-  lambda do |h|
-    errors = {}
+def allowed_keys(allowed_keys)
+  lambda do |h, errors, prefix|
+    new_errors = {}
 
     h.keys.each do |key|
       if !allowed_keys.include?(key)
-        errors[key] = [msg]
+        new_errors[key] = ['not allowed']
       end
     end
 
-    [h, errors]
+    [h, merge(errors, new_errors)]
   end
 end
 
-def nested_hash(key, msg = 'must be a hash')
-  nested(Hash, key, msg)
+def nested_hash(key, *validators)
+  lambda do |h, errors, prefix|
+    if h[key].is_a?(Hash)
+      all(*validators).call(h[key], errors, prefix)
+    else
+      [{}, {join(prefix, key) => ['must be a hash']}]
+    end
+  end
 end
 
 def nested_array(key, msg = 'must be an array')
-  nested(Array, key, msg)
-end
-
-def nested(type, key, msg)
-  lambda do |h|
-    if h[key].is_a?(type)
-      [h[key], {}]
-    else
-      [{}, {key => [msg]}]
-    end
-  end
 end
 
 def from_to(key); end
 def tariff_id(key, merchant); end
 
 
-def apply(*args); end
+def all(*validators)
+  lambda do |object, errors, prefix|
+    [
+      object,
+      validators.inject(errors) do |errs, validator|
+        o, new_errors = validator.call(object, errs, prefix)
+        merge(errs, new_errors)
+      end
+    ]
+  end
+end
 
-def sequence(*validators)
-  lambda do |validated_object|
-    validators.inject([validated_object, {}]) do |(object, errors), validator|
-      new_object, new_errors = validator.call(object)
-      [new_object, merge(errors, new_errors)]
+def required(key)
+  lambda do |hash, errors, prefix|
+    if hash.has_key?(key)
+      [hash, errors]
+    else
+      errors[join(prefix, key)]
+      [hash, error]
     end
   end
 end
@@ -62,10 +69,27 @@ def merge(e1, e2)
   end
 end
 
+def join(prefix, segment)
+  [prefix, segment].compact.join('/')
+end
+
 def each(key, validator)
 end
 
 def merchant; end
+
+v = hash(
+  allowed_keys(['price_policy']),
+  nested_hash('price_policy',
+    allowed_keys(['tiers']),
+    nested_array('tiers',
+      hash(
+        allowed_keys(['conditions', 'tariff_id']),
+        nested_hash('conditions',
+          allowed_keys(['basket_value', 'distance']),
+          from_to('basket_value'),
+          from_to('distance')),
+        tariff_id('tariff_id', merchant)))))
 
 pp_hash = {
   'price_policy' => {
@@ -81,42 +105,13 @@ pp_hash = {
   }
 }
 
-v = sequence(
-  hash,
+w = hash(
   allowed_keys(['price_policy']),
-  nested_hash('price_policy'),
-  allowed_keys(['tiers']),
-  nested_array('tiers'),
-  each('tiers', sequence(
-    hash,
-    allowed_keys(['conditions', 'tariff_id']),
-    apply(
-      sequence(
-        nested_hash('conditions'),
-        allowed_keys(['basket_value', 'distance']),
-        apply(
-          from_to('basket_value'),
-          from_to('distance'))),
-      tariff_id('tariff_id', merchant)))))
-
-v = sequence(
-  hash,
-  allowed_keys(%w(price_policy)),
-  nested_hash('price_policy'),
-  allowed_keys(%w(tiers)),
-  nested_array('tiers')
+  nested_hash('price_policy')
 )
 
-puts v.call({
-  'price_policy' => {
-    'tiers' => [
-      {
-        'conditions' => {
-          'basket_value' => { 'from' => 3, 'to' => 5 },
-          'distance' => { 'from' => 0, 'to' => 100 }
-        },
-        'tariff_id' => 3
-      }
-    ]
-  }
-})
+h = {
+  'a' => 'x'
+}
+
+puts w.call(h, {}, nil)
