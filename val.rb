@@ -3,7 +3,7 @@ def hash(*validators)
     if h.is_a?(Hash)
       all(*validators).call(h, errors, prefix)
     else
-      [{}, merge(errors, {join(prefix, 'base') => ['must be a hash']})]
+      [h, merge(errors, {prefix => ['must be a hash']})]
     end
   end
 end
@@ -14,7 +14,7 @@ def allowed_keys(allowed_keys)
 
     h.keys.each do |key|
       if !allowed_keys.include?(key)
-        new_errors[key] = ['not allowed']
+        new_errors[join(prefix, key)] = ['not allowed']
       end
     end
 
@@ -25,17 +25,48 @@ end
 def nested_hash(key, *validators)
   lambda do |h, errors, prefix|
     if h[key].is_a?(Hash)
-      all(*validators).call(h[key], errors, prefix)
+      all(*validators).call(h[key], errors, join(prefix, key))
     else
-      [{}, {join(prefix, key) => ['must be a hash']}]
+      [h[key], merge(errors, {join(prefix, key) => ['must be a hash']})]
     end
   end
 end
 
-def nested_array(key, msg = 'must be an array')
+def nested_array(key, validator = lambda {})
+  lambda do |h, errors, prefix|
+    if h[key].is_a?(Array)
+      result_object, result_errors = [], errors
+      h[key].each.with_index do |object, index|
+        new_object, new_errors = validator.call(object, errors, join(prefix, index))
+        result_object << new_object
+        result_errors = merge(result_errors, new_errors)
+      end
+      [result_object, result_errors]
+    else
+      [h[key], merge(errors, {join(prefix, key) => ['must be an array']})]
+    end
+  end
 end
 
-def from_to(key); end
+def integer(key)
+  lambda do |h, errors, prefix|
+    begin
+      i = Integer(h[key])
+      h[key] = i
+      [h, errors]
+    rescue ArgumentError
+      [h, merge(errors, {join(prefix, key) => ['must be an integer']})]
+    end
+  end
+end
+
+def from_to(key)
+  nested_hash(key,
+    integer('from'),
+    integer('to')
+  )
+end
+
 def tariff_id(key, merchant); end
 
 
@@ -64,7 +95,7 @@ end
 
 def merge(e1, e2)
   (e1.keys + e2.keys).inject({}) do |e, k|
-    e[k] = (e1[k] || []) + (e2[k] || [])
+    e[k] = ((e1[k] || []) + (e2[k] || [])).uniq
     e
   end
 end
@@ -105,13 +136,38 @@ pp_hash = {
   }
 }
 
+
 w = hash(
   allowed_keys(['price_policy']),
-  nested_hash('price_policy')
+  nested_hash('price_policy',
+    allowed_keys(['tiers']),
+    nested_array('tiers',
+      hash(
+        allowed_keys(['conditions', 'tariff_id']),
+        nested_hash('conditions',
+          allowed_keys(['basket_value', 'distance']),
+          from_to('basket_value'),
+          from_to('basket_value')
+        )
+      )
+    )
+  )
 )
 
 h = {
-  'a' => 'x'
+  'price_policy' => {
+    'tiers' => [
+      {
+        'conditions' => {
+          'basket_value' => {
+            'from' => 'hello',
+            'to'   => 5
+          }
+        },
+        'tariff_id'  => 'world'
+      }
+    ]
+  }
 }
 
 puts w.call(h, {}, nil)
