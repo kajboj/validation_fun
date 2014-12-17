@@ -137,6 +137,7 @@ end
 
 w = hash(
   allowed_keys(['price_policy']),
+  required('price_policy'),
   nested_hash('price_policy',
     allowed_keys(['tiers']),
     nested_array('tiers',
