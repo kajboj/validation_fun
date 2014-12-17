@@ -122,7 +122,13 @@ def first_failure(*validators)
 end
 
 def add(errors, msg, *segments)
-  merge(errors, {join(*segments) => [msg]})
+  key = if segments.compact.empty?
+    'base'
+  else
+    join(*segments)
+  end
+
+  merge(errors, {key => [msg]})
 end
 
 def merge(e1, e2)
