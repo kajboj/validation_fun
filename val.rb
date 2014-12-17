@@ -27,7 +27,7 @@ def nested_hash(key, *validators)
     if h[key].is_a?(Hash)
       all(*validators).call(h[key], errors, join(prefix, key))
     else
-      add(errors, key, 'must be a hash')
+      add(errors, 'must be a hash', prefix, key)
       false
     end
   end
@@ -36,14 +36,12 @@ end
 def nested_array(key, validator = lambda {})
   lambda do |h, errors, prefix|
     if h[key].is_a?(Array)
-      h[key].each.with_index do |object, index|
-        validator.call(object, errors, join(prefix, index))
-        result_object << new_object
-        result_errors = merge(result_errors, new_errors)
-      end
-      [result_object, result_errors]
+      h[key].inject([true, 0]) do |(acc, index), array|
+        b = validator.call(array, errors, join(prefix, index))
+        [acc && b, index+1]
+      end.first
     else
-      add(errors, key, 'must be an array')
+      add(errors, 'must be an array', prefix, key)
       false
     end
   end
@@ -54,9 +52,10 @@ def integer(key)
     begin
       i = Integer(h[key])
       h[key] = i
-      [h, errors]
+      true
     rescue ArgumentError, TypeError
-      [h, merge(errors, {join(prefix, key) => ['must be an integer']})]
+      add(errors, 'must be an integer', prefix, key)
+      false
     end
   end
 end
@@ -65,42 +64,57 @@ def from_to(key)
   first_failure(
     nested_hash(key,
       allowed_keys(['from', 'to']),
-      integer('from'),
-      integer('to')
+      first_failure(
+        required('from'),
+        integer('from')
+      ),
+      first_failure(
+        required('to'),
+        integer('to')
+      )
     ),
     lambda do |h, errors, prefix|
       if h[key]['from'] > h[key]['to']
-        [h, merge(errors, {join(prefix, key, 'to') => ['must be greater or equal from']})]
+        add(errors, 'must be greater or equal "from"', prefix, key, 'to')
+        false
       else
-        [h, errors]
+        true
       end
     end
   )
 end
 
-def tariff_id(key, merchant); end
+def tariff_id(key)
+  lambda do |h, errors, prefix|
+    true
+  end
+end
 
 def all(*validators)
   lambda do |object, errors, prefix|
-    validators.inject(true) do |b, validator|
-      r = validator.call(object, errs, prefix)
-      b && r
+    validators.inject(true) do |acc, validator|
+      r = validator.call(object, errors, prefix)
+      acc && r
+    end
+  end
+end
+
+def required(key)
+  lambda do |h, errors, prefix|
+    if !h.has_key?(key)
+      add(errors, 'is required', prefix, key)
     end
   end
 end
 
 def first_failure(*validators)
   lambda do |object, errors, prefix|
-    count = count_errors(errors)
-    [
-      object,
-      validators.each do |validator|
-        o, new_errors = validator.call(object, errors, prefix)
-        if count < count_errors(new_errors)
-          return [o, new_errors]
-        end
+    validators.each do |validator|
+      if !validator.call(object, errors, prefix)
+        return false
       end
-    ]
+    end
+    true
   end
 end
 
@@ -109,51 +123,14 @@ def add(errors, msg, *segments)
 end
 
 def merge(e1, e2)
-  (e1.keys + e2.keys).inject({}) do |e, k|
-    e[k] = ((e1[k] || []) + (e2[k] || [])).uniq
-    e
-  end
-end
-
-def count_errors(e)
-  e.inject(0) do |count, (_, v)|
-    count + v.size
+  e2.keys.each do |k, v|
+    e1[k] = ((e1[k] || []) + (e2[k] || [])).uniq
   end
 end
 
 def join(*segments)
   segments.compact.join('/')
 end
-
-def merchant; end
-
-v = hash(
-  allowed_keys(['price_policy']),
-  nested_hash('price_policy',
-    allowed_keys(['tiers']),
-    nested_array('tiers',
-      hash(
-        allowed_keys(['conditions', 'tariff_id']),
-        nested_hash('conditions',
-          allowed_keys(['basket_value', 'distance']),
-          from_to('basket_value'),
-          from_to('distance')),
-        tariff_id('tariff_id', merchant)))))
-
-pp_hash = {
-  'price_policy' => {
-    'tiers' => [
-      {
-        'conditions' => {
-          'basket_value' => { 'from' => 3, 'to' => 5 },
-          'distance' => { 'from' => 0, 'to' => 100 }
-        },
-        'tariff_id' => 3
-      }
-    ]
-  }
-}
-
 
 w = hash(
   allowed_keys(['price_policy']),
@@ -164,9 +141,10 @@ w = hash(
         allowed_keys(['conditions', 'tariff_id']),
         nested_hash('conditions',
           allowed_keys(['basket_value', 'distance']),
-          from_to('basket_value')
-          # from_to('distance')
-        )
+          from_to('basket_value'),
+          from_to('distance')
+        ),
+        tariff_id('tariff_id')
       )
     )
   )
@@ -178,12 +156,11 @@ h = {
       {
         'conditions' => {
           'basket_value' => {
-            'from' => 7,
+            'from' => 17,
             'to'   => '12'
           },
           'distance' => {
-            'from' => 1,
-            'to'   => 2
+            'from' => 1
           }
         },
         'tariff_id'  => 'world'
@@ -192,5 +169,11 @@ h = {
   }
 }
 
+errors = {}
+
+puts w.call(h, errors, nil)
+
 require 'json'
-puts JSON.pretty_generate(w.call(h, {}, nil))
+puts JSON.pretty_generate(h)
+puts JSON.pretty_generate(errors)
+
