@@ -75,7 +75,7 @@ def from_to(key)
     ),
     lambda do |h, errors, prefix|
       if h[key]['from'] > h[key]['to']
-        add(errors, 'must be greater or equal "from"', prefix, key, 'to')
+        add(errors, 'must be greater or equal \'from\'', prefix, key, 'to')
         false
       else
         true
@@ -103,6 +103,9 @@ def required(key)
   lambda do |h, errors, prefix|
     if !h.has_key?(key)
       add(errors, 'is required', prefix, key)
+      false
+    else
+      true
     end
   end
 end
