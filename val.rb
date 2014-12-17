@@ -37,7 +37,7 @@ def nested_array(key, validator = lambda {})
   lambda do |h, errors, prefix|
     if h[key].is_a?(Array)
       h[key].inject([true, 0]) do |(acc, index), array|
-        b = validator.call(array, errors, join(prefix, index))
+        b = validator.call(array, errors, join(prefix, key, index))
         [acc && b, index+1]
       end.first
     else
